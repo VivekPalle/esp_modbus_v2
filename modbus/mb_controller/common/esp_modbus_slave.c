@@ -16,6 +16,9 @@
 
 #include "esp_modbus_callbacks.h"   // for modbus callbacks function pointers declaration
 
+extern char acb_ipr;
+extern uint8_t pwd[4];
+
 #ifdef CONFIG_FMB_CONTROLLER_SLAVE_ID_SUPPORT
 
 #define MB_ID_BYTE0(id) ((uint8_t)(id))
@@ -59,7 +62,7 @@ static mb_descr_entry_t *mbc_slave_find_reg_descriptor(void *ctx, mb_param_type_
     return NULL;
 }
 
-static void mbc_slave_free_descriptors(void *ctx)
+void mbc_slave_free_descriptors(void *ctx)
 {
     mb_descr_entry_t *it;
     mb_slave_options_t *mbs_opts = MB_SLAVE_GET_OPTS(ctx);
@@ -304,115 +307,132 @@ static esp_err_t mbc_slave_send_param_access_notification(void *ctx, mb_event_gr
     return err;
 }
 
-/*
- * Below are the common slave read/write register callback functions
- * The concrete slave port can override them using interface function pointers
- */
-
 // Callback function for reading of MB Input Registers
 mb_err_enum_t mbc_reg_input_slave_cb(mb_base_t *inst, uint8_t *reg_buffer, uint16_t address, uint16_t n_regs)
 {
-    void *ctx = (void *)MB_SLAVE_GET_IFACE_FROM_BASE(inst);
-    MB_RETURN_ON_FALSE(reg_buffer, MB_EINVAL, TAG, "Slave stack call failed.");
-    mb_err_enum_t status = MB_ENOERR;
-    address--; // address of register is already +1
-    mb_descr_entry_t *it = mbc_slave_find_reg_descriptor(ctx, MB_PARAM_INPUT, address, n_regs);
-    if (it) {
-        uint16_t input_reg_start = (uint16_t)it->start_offset; // Get Modbus start address
-        uint8_t *input_buffer = (uint8_t *)it->p_data; // Get instance address
-        uint16_t regs = n_regs;
-        uint16_t reg_index;
-        // If input or configuration parameters are incorrect then return an error to stack layer
-        reg_index = (uint16_t)(address - input_reg_start);
-        reg_index <<= 1; // register Address to byte address
-        input_buffer += reg_index;
-        uint8_t *buffer_start = input_buffer;
-        CRITICAL_SECTION(inst->lock)
-        {
-            while (regs > 0) {
-                _XFER_2_RD(reg_buffer, input_buffer);
-                reg_index += 2;
-                regs -= 1;
-            }
-        }
-        // Send access notification
-        (void)mbc_slave_send_param_access_notification(ctx, MB_EVENT_INPUT_REG_RD);
-        // Send parameter info to application task
-        (void)mbc_slave_send_param_info(ctx, MB_EVENT_INPUT_REG_RD, address,
-                                            (uint8_t *)buffer_start, n_regs);
-    } else {
-        status = MB_ENOREG;
-    }
-    return status;
+	uint16_t i_address = 30000 + address + 1;
+	printf("\n!! mbc_reg_input_slave_cb: %d, %d \n", (i_address-1), (address-1));
+   void *ctx = (void *)MB_SLAVE_GET_IFACE_FROM_BASE(inst);
+   MB_RETURN_ON_FALSE(reg_buffer, MB_EINVAL, TAG, "Slave stack call failed.");
+   mb_err_enum_t status = MB_ENOERR;
+   address--; // address of register is already +1
+   i_address--;
+   mb_descr_entry_t *it = mbc_slave_find_reg_descriptor(ctx, MB_PARAM_INPUT, i_address, n_regs);
+   if (it) {
+       uint16_t input_reg_start = (uint16_t)it->start_offset; // Get Modbus start address
+       uint8_t *input_buffer = (uint8_t *)it->p_data; // Get instance address
+       uint16_t regs = n_regs;
+       uint16_t reg_index;
+       // If input or configuration parameters are incorrect then return an error to stack layer
+       reg_index = (uint16_t)(i_address - input_reg_start);
+       reg_index <<= 1; // register Address to byte address
+       input_buffer += reg_index;
+       uint8_t *buffer_start = input_buffer;
+       CRITICAL_SECTION(inst->lock)
+       {
+           while (regs > 0) {
+               _XFER_2_RD(reg_buffer, input_buffer);
+               reg_index += 2;
+               regs -= 1;
+           }
+       }
+       // Send access notification
+       (void)mbc_slave_send_param_access_notification(ctx, MB_EVENT_INPUT_REG_RD);
+       // Send parameter info to application task
+       (void)mbc_slave_send_param_info(ctx, MB_EVENT_INPUT_REG_RD, address,
+                                           (uint8_t *)buffer_start, n_regs);
+   } else {
+       status = MB_ENOREG;
+   }
+   return status;
 }
 
 // Callback function for reading of MB Holding Registers
 // Executed by stack when request to read/write holding registers is received
 mb_err_enum_t mbc_reg_holding_slave_cb(mb_base_t *inst, uint8_t *reg_buffer, uint16_t address, uint16_t n_regs, mb_reg_mode_enum_t mode)
 {
-    void *ctx = (void *)MB_SLAVE_GET_IFACE_FROM_BASE(inst);
-    MB_RETURN_ON_FALSE(reg_buffer, MB_EINVAL, TAG, "Slave stack call failed.");
-    mb_err_enum_t status = MB_ENOERR;
-    uint16_t reg_index;
-    address--; // address of register is already +1
-    mb_descr_entry_t *it = mbc_slave_find_reg_descriptor(ctx, MB_PARAM_HOLDING, address, n_regs);
-    if (it) {
-        uint16_t reg_holding_start = (uint16_t)it->start_offset; // Get Modbus start address
-        uint8_t *holding_buffer = (uint8_t *)it->p_data; // Get instance address
-        uint16_t regs = n_regs;
-        reg_index = (uint16_t) (address - reg_holding_start);
-        reg_index <<= 1; // register Address to byte address
-        holding_buffer += reg_index;
-        uint8_t *buffer_start = holding_buffer;
-        switch (mode) {
-            case MB_REG_READ:
-            	printf("\n!!!Register read operation = %d!!!\n", it->access);
-                if (it->access != MB_ACCESS_WO) {
-                    CRITICAL_SECTION(inst->lock)
-                    {
-                        while (regs > 0) {
-                            _XFER_2_RD(reg_buffer, holding_buffer);
-                            reg_index += 2;
-                            regs -= 1;
-                        };
-                    }
-                    // Send access notification
-                    (void)mbc_slave_send_param_access_notification(ctx, MB_EVENT_HOLDING_REG_RD);
-                    // Send parameter info
-                    (void)mbc_slave_send_param_info(ctx, MB_EVENT_HOLDING_REG_RD, address,
-                                                        (uint8_t *)buffer_start, n_regs);
-                } else {
-                    status = MB_EINVAL;
-                }
-                break;
-            case MB_REG_WRITE:
-            	printf("\n!!!Register write operation = %d!!!\n", it->access);
-//                if (it->access != MB_ACCESS_RO) {
-                    CRITICAL_SECTION(inst->lock)
-                    {
-                    	update_json_modbus(address, reg_buffer, n_regs);
-                        while (regs > 0) {
-                            _XFER_2_WR(holding_buffer, reg_buffer);
-                            holding_buffer += 2;
-                            reg_index += 2;
-                            regs -= 1;
-                        };
-                    }
-                    // Send access notification
-                    (void)mbc_slave_send_param_access_notification(ctx, MB_EVENT_HOLDING_REG_WR);
-                    // Send parameter info
-                    (void)mbc_slave_send_param_info(ctx, MB_EVENT_HOLDING_REG_WR, (uint16_t)address,
-                                    (uint8_t *)buffer_start, (uint16_t)n_regs);
+	uint16_t h_address = 40000 + address + 1;
+//	printf("\n!! mbc_reg_holding_slave_cb: %d, %d \n", (h_address-1), (address-1));
+   void *ctx = (void *)MB_SLAVE_GET_IFACE_FROM_BASE(inst);
+   MB_RETURN_ON_FALSE(reg_buffer, MB_EINVAL, TAG, "Slave stack call failed.");
+   mb_err_enum_t status = MB_ENOERR;
+   uint16_t reg_index;
+   address--; // address of register is already +1
+   h_address--;
+   if(h_address == 42001 && mode == MB_REG_WRITE && acb_ipr == 1){
+	   n_regs = n_regs-2;
+   }
+   mb_descr_entry_t *it = mbc_slave_find_reg_descriptor(ctx, MB_PARAM_HOLDING, h_address, n_regs);
+   if (it) {
+       uint16_t reg_holding_start = (uint16_t)it->start_offset; // Get Modbus start address
+       uint8_t *holding_buffer = (uint8_t *)it->p_data; // Get instance address
+       uint16_t regs = n_regs;
+       reg_index = (uint16_t) (h_address - reg_holding_start);
+       reg_index <<= 1; // register Address to byte address
+       holding_buffer += reg_index;
+       uint8_t *buffer_start = holding_buffer;
+       switch (mode) {
+           case MB_REG_READ:
+//           	printf("\n!!!Register read operation = %d!!!\n", it->access);
+               if (it->access != MB_ACCESS_WO) {
+                   CRITICAL_SECTION(inst->lock)
+                   {
+                       while (regs > 0) {
+                           _XFER_2_RD(reg_buffer, holding_buffer);
+                           reg_index += 2;
+                           regs -= 1;
+                       };
+                   }
+                   // Send access notification
+                   (void)mbc_slave_send_param_access_notification(ctx, MB_EVENT_HOLDING_REG_RD);
+                   // Send parameter info
+                   (void)mbc_slave_send_param_info(ctx, MB_EVENT_HOLDING_REG_RD, address,
+                                                       (uint8_t *)buffer_start, n_regs);
+               } else {
+                   status = MB_EINVAL;
+               }
+               break;
+           case MB_REG_WRITE:
+//           	printf("\n!!!Register write operation = %d!!!\n", it->access);
+				if(h_address == 42001 && acb_ipr == 1){
+					n_regs = n_regs+2;
+				}
+//                if (it->access != MB_ACCESS_RO)
+//                {
+					printf("acb_ipr:%d, pwd[0]:%d, pwd[1]:%d, pwd[2]:%d, pwd[3]:%d \n", acb_ipr, reg_buffer[(n_regs*2)-4], reg_buffer[(n_regs*2)-3], reg_buffer[(n_regs*2)-2], reg_buffer[(n_regs*2)-1]);
+					if(acb_ipr == 1 && (reg_buffer[(n_regs*2)-4] == pwd[0] && reg_buffer[(n_regs*2)-3] == pwd[1] && reg_buffer[(n_regs*2)-2] == pwd[2] && reg_buffer[(n_regs*2)-1] == pwd[3])
+					&& ((h_address == 42001 && n_regs == 120) || (h_address == 49001 && n_regs == 4) || (h_address == 49101 && n_regs == 6) || (h_address == 49201 && n_regs == 4)))
+					{
+						CRITICAL_SECTION(inst->lock)
+						{
+							update_json_modbus(h_address, reg_buffer, (n_regs-2));
+							regs = n_regs-2;
+							while (regs > 0) {
+							   _XFER_2_WR(holding_buffer, reg_buffer);
+							   holding_buffer += 2;
+							   reg_index += 2;
+							   regs -= 1;
+							};
+						}
+						// Send access notification
+						(void)mbc_slave_send_param_access_notification(ctx, MB_EVENT_HOLDING_REG_WR);
+						// Send parameter info
+						(void)mbc_slave_send_param_info(ctx, MB_EVENT_HOLDING_REG_WR, (uint16_t)address,
+								   (uint8_t *)buffer_start, (uint16_t)n_regs);
+					} else {
+//						printf("\nWR_Fail");
+						status = MB_EINVAL;
+					}
+
 //                } else {
-//                	printf("\nwrite failure\n");
 //                    status = MB_EINVAL;
 //                }
-                break;
-        }
-    } else {
-        status = MB_ENOREG;
-    }
-    return status;
+               break;
+       }
+   } else {
+       status = MB_ENOREG;
+   }
+   return status;
 }
 
 // Callback function for reading of MB Coils Registers
