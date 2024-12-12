@@ -16,7 +16,7 @@
 
 #include "esp_modbus_callbacks.h"   // for modbus callbacks function pointers declaration
 
-extern char acb_ipr;
+extern char acb_ipr, mccb_typeM;
 extern uint8_t pwd[4];
 
 #ifdef CONFIG_FMB_CONTROLLER_SLAVE_ID_SUPPORT
@@ -310,8 +310,8 @@ static esp_err_t mbc_slave_send_param_access_notification(void *ctx, mb_event_gr
 // Callback function for reading of MB Input Registers
 mb_err_enum_t mbc_reg_input_slave_cb(mb_base_t *inst, uint8_t *reg_buffer, uint16_t address, uint16_t n_regs)
 {
-	uint16_t i_address = 30000 + address + 1;
-	printf("\n!! mbc_reg_input_slave_cb: %d, %d \n", (i_address-1), (address-1));
+	uint16_t i_address = 30000 + address;
+	printf("\n!! mbc_reg_input_slave_cb: %d, %d \n", i_address, address);
    void *ctx = (void *)MB_SLAVE_GET_IFACE_FROM_BASE(inst);
    MB_RETURN_ON_FALSE(reg_buffer, MB_EINVAL, TAG, "Slave stack call failed.");
    mb_err_enum_t status = MB_ENOERR;
@@ -351,7 +351,13 @@ mb_err_enum_t mbc_reg_input_slave_cb(mb_base_t *inst, uint8_t *reg_buffer, uint1
 // Executed by stack when request to read/write holding registers is received
 mb_err_enum_t mbc_reg_holding_slave_cb(mb_base_t *inst, uint8_t *reg_buffer, uint16_t address, uint16_t n_regs, mb_reg_mode_enum_t mode)
 {
-	uint16_t h_address = 40000 + address + 1;
+	uint16_t h_address;
+	if(acb_ipr == 1){
+		h_address = 40000 + address + 1;
+	}else{
+		h_address = 40000 + address;
+	}
+
 //	printf("\n!! mbc_reg_holding_slave_cb: %d, %d \n", (h_address-1), (address-1));
    void *ctx = (void *)MB_SLAVE_GET_IFACE_FROM_BASE(inst);
    MB_RETURN_ON_FALSE(reg_buffer, MB_EINVAL, TAG, "Slave stack call failed.");
@@ -399,14 +405,19 @@ mb_err_enum_t mbc_reg_holding_slave_cb(mb_base_t *inst, uint8_t *reg_buffer, uin
 				}
 //                if (it->access != MB_ACCESS_RO)
 //                {
-					printf("acb_ipr:%d, pwd[0]:%d, pwd[1]:%d, pwd[2]:%d, pwd[3]:%d \n", acb_ipr, reg_buffer[(n_regs*2)-4], reg_buffer[(n_regs*2)-3], reg_buffer[(n_regs*2)-2], reg_buffer[(n_regs*2)-1]);
-					if(acb_ipr == 1 && (reg_buffer[(n_regs*2)-4] == pwd[0] && reg_buffer[(n_regs*2)-3] == pwd[1] && reg_buffer[(n_regs*2)-2] == pwd[2] && reg_buffer[(n_regs*2)-1] == pwd[3])
-					&& ((h_address == 42001 && n_regs == 120) || (h_address == 49001 && n_regs == 4) || (h_address == 49101 && n_regs == 6) || (h_address == 49201 && n_regs == 4)))
+					printf("mccb_typeM:%d, acb_ipr:%d, pwd[0]:%d, pwd[1]:%d, pwd[2]:%d, pwd[3]:%d \n", mccb_typeM, acb_ipr, reg_buffer[(n_regs*2)-4], reg_buffer[(n_regs*2)-3], reg_buffer[(n_regs*2)-2], reg_buffer[(n_regs*2)-1]);
+					if((mccb_typeM == 1) || (acb_ipr == 1 && (reg_buffer[(n_regs*2)-4] == pwd[0] && reg_buffer[(n_regs*2)-3] == pwd[1] && reg_buffer[(n_regs*2)-2] == pwd[2] && reg_buffer[(n_regs*2)-1] == pwd[3])
+					&& ((h_address == 42001 && n_regs == 120) || (h_address == 49001 && n_regs == 4) || (h_address == 49101 && n_regs == 6) || (h_address == 49201 && n_regs == 4))))
 					{
 						CRITICAL_SECTION(inst->lock)
 						{
-							update_json_modbus(h_address, reg_buffer, (n_regs-2));
-							regs = n_regs-2;
+							if(acb_ipr == 1){
+								regs = n_regs-2;
+							}else{
+								regs = n_regs;
+							}
+							update_json_modbus(h_address, reg_buffer, regs);
+
 							while (regs > 0) {
 							   _XFER_2_WR(holding_buffer, reg_buffer);
 							   holding_buffer += 2;
